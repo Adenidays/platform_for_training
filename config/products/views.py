@@ -1,10 +1,12 @@
+from django.db.models import Avg, Count
 from django.utils import timezone
-from rest_framework import status, generics
+from djoser.conf import User
+from rest_framework import status, generics, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import Product, Group, Lesson
-from .serializers import ProductSerializer, LessonSerializer
+from .serializers import ProductSerializer, LessonSerializer, GroupSerializer
 
 
 class ProductAccessView(APIView):
@@ -35,7 +37,8 @@ class ProductAccessView(APIView):
                 max_group.students.remove(max_group.students.last())
 
             if max_group.students.count() >= max_group.max_users:
-                return Response({'message': 'Достигнуто максимальное количество пользователей в группе.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'message': 'Достигнуто максимальное количество пользователей в группе.'},
+                                status=status.HTTP_400_BAD_REQUEST)
 
             min_group.students.add(user)
 
@@ -43,10 +46,6 @@ class ProductAccessView(APIView):
         else:
             return Response({'message': 'Продукт еще не начался. Пожалуйста, дождитесь начала продукта.'},
                             status=status.HTTP_400_BAD_REQUEST)
-
-class ProductListView(generics.ListAPIView):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
 
 
 class LessonListView(generics.ListAPIView):
@@ -56,3 +55,48 @@ class LessonListView(generics.ListAPIView):
     def get_queryset(self):
         product_id = self.kwargs['product_id']
         return Lesson.objects.filter(product_id=product_id)
+
+
+class ProductStatisticsView(APIView):
+    def get(self, request, format=None):
+        total_users = User.objects.count()
+
+        products = Product.objects.all()
+
+        product_statistics = []
+
+        for product in products:
+            total_students = Group.objects.filter(product=product).count()
+
+            group_counts = Group.objects.filter(product=product).values('students').annotate(
+                count=Count('students')).values_list('count', flat=True)
+            max_users = product.group_set.aggregate(max_users=Avg('max_users'))['max_users']
+            avg_fill_rate = sum(group_counts) / (len(group_counts) * max_users) * 100 if max_users != 0 else 0
+
+            access_count = product.group_set.aggregate(total_access_count=Count('students'))['total_access_count']
+            product_access_percentage = access_count / total_users * 100 if total_users != 0 else 0
+
+            product_statistics.append({
+                'product_id': product.id,
+                'product_title': product.title,
+                'total_students': total_students,
+                'avg_fill_rate': avg_fill_rate,
+                'product_access_percentage': product_access_percentage
+            })
+
+        return Response(product_statistics)
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+
+
+class LessonViewSet(viewsets.ModelViewSet):
+    queryset = Lesson.objects.all()
+    serializer_class = LessonSerializer
+
+
+class GroupViewSet(viewsets.ModelViewSet):
+    queryset = Group.objects.all()
+    serializer_class = GroupSerializer
